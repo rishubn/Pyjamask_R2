@@ -1,0 +1,56 @@
+Na, Nm, Nc : the number of complete blocks of associated data, plaintext, and ciphertextmessage, respectively
+Ina, Inm, Inc : binary variables equal to 1 if the last block of the respective data type is incomplete, and 0 otherwise
+NPUB[5..0] : Refers to the last five least significant binary digits in the public message number, NPUB. Used for calculating the first offset in OCB mode authenticated encryption/decryption
+
+v1: Pyjamask128d16
+
+a.  Design goal
+
+Support for authenticated encryption and decryption (Hashing is not a feature of this algorithm)
+Folded architecture, maximize throughput given the following constraints:
+       1) < 2000 LUTs
+       2) No BRAMs
+       3) no DSP units
+
+b.  Supported maximum sizes of inputs
+
+2^16-1 Bytes
+
+c.  Reference software implementation
+
+https://github.com/pyjamask-cipher/pyjamask-reference-implementation
+src_sw/crypto_aead/pyjamask128aeadv1/ref/
+
+d.  Non-default values of generics and constants
+
+None
+
+e.  Block sizes
+
+AD block size = 128 bites
+Plaintext/Ciphertext block size = 128 bits
+
+f.  Execution times
+
+Execution time of authenticated encryption:
+697 + NPUB[5..0] + (258*Na) + (253*Ina) + 5 + (262*Nm) + (257*Inm) + 253
+
+Execution time of authenticated decryption:
+697 + NPUB[5..0] + (258*Na) + (253*Ina) + 5 + (273*Nc) + (257*Inc) + 254
+
+g.  Latencies
+
+Latency of authenticated encryption:
+258
+
+Latency of authenticated decryption:
+269
+
+h.  Difference between execution times for a new key and the same key
+Ignoring the influence of NPUB[5..0]
+
+Authenticated encryption:
+432
+
+Authenticated decryption:
+378
