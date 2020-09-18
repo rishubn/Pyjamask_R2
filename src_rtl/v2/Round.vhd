@@ -22,7 +22,7 @@ entity Round is
         clk : in std_logic;
         mi : in std_logic_vector(0 to CCW - 1);
         co : out std_logic_vector(0 to CCW - 1);
-        sel_row : in std_logic_vector(1 downto 0);
+        shift_rows : in std_logic;
         sel_inv : in std_logic;
         en_subbytes : in std_logic;
         shift_in : in std_logic;
@@ -58,10 +58,10 @@ architecture rtl of Round is
     signal sb_r2 : std_logic_vector(0 to CCW - 1);
     signal sb_r3 : std_logic_vector(0 to CCW - 1);
 
-    signal sb_r0_r : std_logic_vector(0 to CCW - 1);
-    signal sb_r1_r : std_logic_vector(0 to CCW - 1);
-    signal sb_r2_r : std_logic_vector(0 to CCW - 1);
-    signal sb_r3_r : std_logic_vector(0 to CCW - 1);
+    signal sb_r0_r : std_logic_vector(0 to (4*CCW) - 1);
+    --signal sb_r1_r : std_logic_vector(0 to CCW - 1);
+    --signal sb_r2_r : std_logic_vector(0 to CCW - 1);
+    --signal sb_r3_r : std_logic_vector(0 to CCW - 1);
 begin
     
 
@@ -72,10 +72,12 @@ begin
                 in_sr <= in_sr(CCW to 4*CCW - 1) & in_mux; -- Add round key
             end if;
             if en_subbytes = '1' then
-                sb_r0_r <= sb_r0;
-                sb_r1_r <= sb_r1;
-                sb_r2_r <= sb_r2;
-                sb_r3_r <= sb_r3;
+                sb_r0_r(0 to CCW - 1) <= sb_r0;
+                sb_r0_r(CCW to 2*CCW - 1) <= sb_r1;
+                sb_r0_r(2*CCW to 3*CCW - 1) <= sb_r2;
+                sb_r0_r(3*CCW to 4*CCW - 1) <= sb_r3;
+            elsif shift_rows = '1' then
+                sb_r0_r <= sb_r0_r(CCW to 4*CCW - 1) & (0 to CCW -1 => '0');
             end if;
         end if;
     end process shift_register;
@@ -108,11 +110,7 @@ begin
         sb_r3(i) <= subbytes_out(i)(3);
     end generate subbytes_out_gen;
     
-    with sel_row select sb_row <=
-        sb_r0_r when "00",
-        sb_r1_r when "01",
-        sb_r2_r when "10",
-        sb_r3_r when others;
+    sb_row <= sb_r0_r(0 to CCW - 1);
 
 
     -- mix rows

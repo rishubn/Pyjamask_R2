@@ -285,8 +285,7 @@ begin
             din_valid => c_din_valid,
             key_valid => key_valid,
             key_ready => key_ready,
-            dout => c_dout,
-            done_mm => c_done_mm
+            dout => c_dout
         );
 
 
@@ -786,10 +785,10 @@ begin
                     rotate_bdi_sr <= '1';
                     word_cnt_s <= 0;
                 elsif decrypt_in_r = '1' and bdi_partial_r = '0' then
-                    if c_done_mm = '1' then
+                    --if c_done_mm = '1' then
                         rotate_bdi_sr <= '1';
                         word_cnt_s <= word_cnt_r + 1;
-                    end if;
+                    --end if;
                 else 
                     rotate_bdi_sr <= '1';
                     word_cnt_s <= word_cnt_r + 1;

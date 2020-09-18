@@ -7,7 +7,7 @@ use ieee.std_logic_misc.all;
 entity MatrixMultiply is
     generic (
         DataWidth : integer := 32;
-        PipelineDepth : integer := 4
+        PipelineDepth : integer := 2
     );
     port (
         clk : in std_logic;
@@ -21,78 +21,58 @@ end entity MatrixMultiply;
 
 architecture rtl of MatrixMultiply is
 
-    type ld_t is array(0 to PipelineDepth) of std_logic_vector(0 to 0);
-    type register_t is array(0 to PipelineDepth) of std_logic_vector(0 to DataWidth - 1);
-    type multiply_array_t is array (0 to DataWidth - 1) of std_logic_vector(0 to DataWidth - 1);
-    type add_array_t is array (0 to DataWidth - 1) of std_logic_vector(0 to DataWidth - 1);
-    type matrix_st is array(0 to DataWidth - 1) of std_logic_vector(0 to DataWidth - 1);
-    
-    signal matrix_s : matrix_st;
-    signal matrix_r : register_t;
-    signal mux_out : multiply_array_t;
-    signal xor_out : add_array_t;
-    signal ld_s : ld_t;
-    signal din_r : register_t;
-    signal out_r : register_t;
-    component DRegister
-        generic(
-            DataWidth : integer
-        );
-        port(
-            clk, ld : in std_logic;
-            D : in std_logic_vector(0 to DataWidth - 1);
-            Q : out std_logic_vector(0 to DataWidth - 1)
-        );
-    end component;
-    
+    type add_array_t is array (0 to 15) of std_logic_vector(0 to DataWidth - 1);
+    type matrix_st is array(0 to 15) of std_logic_vector(0 to DataWidth - 1);
+
+    signal matrix_s, matrix_sr : matrix_st;
+    signal matrix_r : std_logic_vector(0 to DataWidth - 1);
+    signal xor_out, xor_out_r : add_array_t;-- , xor_out_r : std_logic_vector(0 to DataWidth - 1);
+    signal din_r : std_logic_vector(0 to DataWidth - 1);
+    signal xor_r : std_logic_vector(0 to DataWidth - 1);
+
+  --  function xor_all(inputarr : matrix_st) return std_logic_vector(0 to DataWidth - 1) is
+ --       variable output_s : std_logic_vector(0 to DataWidth - 1);
+ --   begin
+ --       for i in 0 to 15 loop
+
 begin
-    
 
-   
-    ld_s(0)(0) <= din_valid;
-    din_r(0) <= din;
-    xor_out(0) <= mux_out(0); --
-    mux_out(0) <= matrix_r(0) when din_r(1)(0) = '1' else (others => '0');
-    
-    
-    matrix_init_reg : DRegister generic map(DataWidth => DataWidth)
-                port map(clk => clk, ld => ld_s(0)(0), D => matrix, Q => matrix_r(0));
-    
-    matrix_s(0) <= matrix_r(0)(DataWidth - 1) & matrix_r(0)(0 to DataWidth - 2);
-    layer: for i in 0 to 3 generate
-    
-       -- pipeline_registers 
-            ld_i_reg : DRegister generic map(DataWidth => 1)
-                port map(clk => clk,D => ld_s(i), ld => '1', Q => ld_s(i+1));
-                
-            in_i_reg : DRegister generic map(DataWidth => DataWidth)
-                            port map(clk => clk, ld => ld_s(i)(0), D => din_r(i), Q => din_r(i+1));
-            
-            xor_reg : if i > 0 generate
-                mux_out(8*i) <= matrix_r(i) when din_r(i+1)(8*i) = '1' else (others => '0');
-                xor_out(8*i) <= out_r(i - 1) xor mux_out(8*i);
-                matrix_s(8*i) <= matrix_r(i)(DataWidth - 1) & matrix_r(i)(0 to DataWidth - 2);
-                matrix_i_reg : DRegister generic map(DataWidth => DataWidth)
-                    port map(clk => clk, ld => ld_s(i)(0), D => matrix_s(8*i - 1), Q => matrix_r(i));
-                out_i_reg : DRegister generic map(DataWidth => DataWidth)
-                    port map(clk => clk, ld => ld_s(i)(0), D => xor_out(8*i - 1), Q => out_r(i-1));
-                
-                
-            end generate xor_reg;
-            
-            multiply : for j in 1 to 7 generate
-                matrix_s(8*i+j) <= matrix_s(8*i+j - 1)(DataWidth - 1) & matrix_s(8*i+j - 1)(0 to DataWidth - 2);
-                mux_out(8*i+j) <= matrix_s(8*i+j - 1) when din_r(i+1)(8*i+j) = '1' else (others => '0');
-                xor_out(8*i+j) <= xor_out(8*i+j - 1) xor mux_out(8*i+j);
-            end generate multiply;
-            
-        
-   end generate layer;
-    
-    
-    dout <= xor_out(31);
-    dout_valid <= ld_s(PipelineDepth)(0);
 
+   registers : process(clk)
+   begin
+    if rising_edge(clk) then
+        if din_valid = '1' then
+            matrix_r <= matrix(Datawidth - 16 to DataWidth - 1) & matrix(0 to DataWidth - 16 - 1);
+            din_r <= din;
+            xor_r <= xor_out(15);
+        end if;
+        dout_valid <= din_valid;
+    end if;
+  end process registers;
+
+
+  matrix_rot_gen : for i in 0 to 15 generate
+  --  first : if i < 16 generate
+        matrix_s(i) <= matrix(Datawidth - i to DataWidth - 1) & matrix(0 to DataWidth - i - 1) when din(i) = '1' else (others => '0');
+   -- end generate first;
+  --  second : if i >= 16 generate
+        matrix_sr(i) <= matrix_r(Datawidth - i to DataWidth - 1) & matrix_r(0 to DataWidth - i - 1) when din_r(i+16) = '1' else (others => '0');
+    --end generate second;
+  end generate matrix_rot_gen;
+
+
+  xor_gen : for i in 0 to 15 generate
+    first : if i = 0 generate
+        xor_out(0) <= matrix_s(0);
+        xor_out_r(0) <= xor_r xor matrix_sr(0);
+    end generate first;
+    second : if i > 0 generate
+        xor_out(i) <= xor_out(i - 1) xor matrix_s(i);
+        xor_out_r(i) <= xor_out_r(i - 1) xor matrix_sr(i);
+    end generate second;
+  end generate xor_gen;
+
+  dout <= xor_out_r(15);
 
 
 end architecture rtl;

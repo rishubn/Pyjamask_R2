@@ -36,7 +36,7 @@ entity PyjamaskEncDec is
         -- status flags
         done      : out std_logic;
         done_init : out std_logic;
-        done_mm : out std_logic;
+        --done_mm : out std_logic;
         ready     : out std_logic;
         dout_valid : out std_logic;
         -- data
@@ -47,7 +47,7 @@ end PyjamaskEncDec;
 architecture behavioral of PyjamaskEncDec is
 
 
-    type state_t is (RESET, IDLE, ABSORB_KEY, WRITE_RKEY, WAIT_KMM, ABSORB_MSG, WAIT_MM, PROCESS_MSG, OUTPUT_MSG);
+    type state_t is (RESET, IDLE, ABSORB_KEY, WRITE_RKEY, ABSORB_PT, ABSORB_CT, PROCESS_PT, PROCESS_CT);--, OUTPUT_MSG);
     signal n_state_reg, state_reg : state_t;
 
 
@@ -60,9 +60,11 @@ architecture behavioral of PyjamaskEncDec is
 
     signal we_rkey : std_logic;
 
+    signal rnd_shift_rows : std_logic;
     signal round_cnt_s, round_cnt_r : integer range 0 to NB_ROUNDS_KS_C;
+    signal mm_word_cnt_s, mm_word_cnt_r : integer range 0 to BLOCK_WORDS_C;
     signal word_cnt_s, word_cnt_r : integer range 0 to BLOCK_WORDS_C;
-    signal word_s : std_logic_vector(log2_ceil(BLOCK_WORDS_C) - 1 downto 0);
+    signal word_s, mm_word_s : std_logic_vector(log2_ceil(BLOCK_WORDS_C) - 1 downto 0);
     signal round_s : std_logic_vector(log2_ceil(NB_ROUNDS_KS_C) - 1 downto 0);
     signal ku_round_s : std_logic_vector(log2_ceil(NB_ROUNDS_KS_C) - 1 downto 0);
     signal en_rkey : std_logic;
@@ -74,7 +76,6 @@ architecture behavioral of PyjamaskEncDec is
     signal done_init_s, done_init_r : std_logic;
     signal done_s, done_r : std_logic;
     signal din_mux : std_logic_vector(0 to CCW - 1);
-    signal decin_mux : std_logic_vector(0 to CCW - 1);
     signal encout_mux : std_logic_vector(0 to CCW - 1);
 
     signal round_out : std_logic_vector(0 to CCW - 1);
@@ -82,7 +83,6 @@ architecture behavioral of PyjamaskEncDec is
     signal decrypt_reg, en_decrypt : std_logic;
 
     signal sel_in : std_logic;
-    signal sel_decin : std_logic;
     signal en_in : std_logic;
     signal sel_encout : std_logic;
     signal sel_decrypt : std_logic;
@@ -103,8 +103,9 @@ architecture behavioral of PyjamaskEncDec is
     signal mm_decrypt_mux : std_logic_vector(0 to CCW - 1);
 
     signal sel_key_matrix : std_logic;
-    signal mm_start : std_logic;
-    signal mm_done : std_logic;
+    signal mm_din_valid : std_logic;
+    signal mm_din_valid_s : std_logic;
+    signal mm_dout_valid : std_logic;
 
     signal dout_r : std_logic_vector(0 to DBLK_SIZE - 1);
     signal en_dout : std_logic;
@@ -125,6 +126,7 @@ begin
                 state_reg <= n_state_reg;
                 round_cnt_r <= round_cnt_s;
                 word_cnt_r <= word_cnt_s;
+                mm_word_cnt_r <= mm_word_cnt_s;
             end if;
         end if;
     end process FSM_state_register;
@@ -135,6 +137,7 @@ begin
         n_state_reg <= state_reg;
         round_cnt_s <= round_cnt_r;
         word_cnt_s <= word_cnt_r;
+        mm_word_cnt_s <= mm_word_cnt_r;
         ready <= '0';
         sel_key <= '0';
         en_rkey <= '0';
@@ -142,7 +145,6 @@ begin
         we_rkey <= '0';
         sel_in <= '0';
         en_in <= '0';
-        sel_decin <= '0';
         sel_decrypt <= '0';
         done_s <= '0';
         done_init_s <= '0';
@@ -151,16 +153,18 @@ begin
         en_encr <= '0';
         en_decrypt <= '0';
         en_krow <= '0';
+        rnd_shift_rows <= '0';
         en_subbytes <= '0';
         kshift_in <= '0';
         key_ready <= '0';
         shift_in <= '0';
         dout_valid <= '0';
-        mm_start <= '0';
+        --mm_din_valid <= '0';
         sel_key_matrix <= '0';
         sel_mm_in <= "00";
         en_dout <= '0';
         rot_dout <= '0';
+        mm_din_valid_s <= '0';
         case state_reg is
             when RESET =>
                 round_cnt_s <= 0;
@@ -169,17 +173,21 @@ begin
             when IDLE =>
                 ready <= '1';
                 round_cnt_s <= 0;
+                mm_word_cnt_s <= 0;
                 word_cnt_s <= 0;
                 if init = '1' then
                     n_state_reg <= ABSORB_KEY;
                 elsif start = '1' then
                     if decrypt = '1' then
                         round_cnt_s <= NB_ROUNDS_KS_C - 1;
+                        mm_din_valid_s <= '1';
+                        n_state_reg <= ABSORB_CT;
                     else
+                        n_state_reg <= ABSORB_PT;
                         round_cnt_s <= 0;
                     end if;
                     en_decrypt <= '1';
-                    n_state_reg <= ABSORB_MSG;
+                    --n_state_reg <= ABSORB_MSG;
                 end if;
             when ABSORB_KEY =>
                 sel_krdin <= '1';
@@ -198,6 +206,7 @@ begin
                     end if;
                     word_cnt_s <= 0;
                     en_krow <= '1';
+                    mm_din_valid_s <= '1';
                 elsif key_valid = '1' then
                     we_rkey <= '1'; -- only write/shift on valid keys
                     kshift_in <= '1';
@@ -206,96 +215,154 @@ begin
             when WRITE_RKEY =>
                 sel_mm_in <= "01";
                 sel_key_matrix <= '1';
+                we_rkey <= '1';
+                kshift_in <= '1';
                 if round_cnt_r = NB_ROUNDS_KS_C then
                     word_cnt_s <= 0;
+                    we_rkey <= '0';
                     done_init_s <= '1';
                     n_state_reg <= IDLE;
                 elsif word_cnt_r = BLOCK_WORDS_C then
                     round_cnt_s <= round_cnt_r + 1;
                     word_cnt_s <= 0;
+                    mm_din_valid_s <= '1';
+                    we_rkey <= '0';
+                    kshift_in <= '0';
                     en_krow <= '1';
-                elsif word_cnt_r = 0 then
-                    mm_start <= '1';
-                    n_state_reg <= WAIT_KMM;
+                elsif word_cnt_r = 0 and mm_dout_valid = '0' then
+                    we_rkey <= '0';
+                    kshift_in <= '0';
                 else
-                    we_rkey <= '1';
-                    kshift_in <= '1';
                     word_cnt_s <= word_cnt_r + 1;
                 end if;
-            when WAIT_KMM =>
-                sel_mm_in <= "01";
-                sel_key_matrix <= '1';
-                if mm_done = '1' then
-                    n_state_reg <= WRITE_RKEY;
-                    we_rkey <= '1';
-                    kshift_in <= '1';
-                    word_cnt_s <= word_cnt_r + 1;
-                end if;
-            when ABSORB_MSG =>
+            when ABSORB_PT =>
                 sel_in <= '1';
-                if decrypt = '1' then
-                    sel_decin <= '1'; 
-                    sel_mm_in <= "10";
-                end if;
                 if word_cnt_r = BLOCK_WORDS_C then
                     word_cnt_s <= 0;
                     en_subbytes <= '1';
-                    if decrypt = '1' then
-                        round_cnt_s <= round_cnt_r - 1;
-                    else
+                        mm_din_valid_s <= '1';
                         round_cnt_s <= round_cnt_r + 1;
-                    end if;
-                    n_state_reg <= PROCESS_MSG;
+                    n_state_reg <= PROCESS_PT;
                 elsif din_valid = '1' then
-                    if decrypt = '1' then
-                        mm_start <= '1';
-                        n_state_reg <= WAIT_MM;
-                    else
-                        shift_in <= '1';
-                        word_cnt_s <= word_cnt_r + 1;
-                    end if;
-                end if;
-            when WAIT_MM =>
-                if mm_done = '1' then
-                    n_state_reg <= ABSORB_MSG;
                     word_cnt_s <= word_cnt_r + 1;
+                    --if decrypt = '1' then
+                       -- n_state_reg <= WAIT_MM;
+                     -- if mm_word_cnt_r < BLOCK_WORDS_C -1 then
+                      --  mm_din_valid_s <= '1';
+                       -- mm_word_cnt_s <= mm_word_cnt_r + 1;
+                     -- end if;
+                     -- if mm_dout_valid = '1' then
+                      --  shift_in <= '1';
+                      --end if;
+                    --else
+                        shift_in <= '1';
+                   -- end if;
+                end if;
+            when ABSORB_CT =>
+              --sel_in <= '1';
+              --sel_decin <= '1';
+              sel_mm_in <= "10";
+              if word_cnt_r = BLOCK_WORDS_C then
+                    word_cnt_s <= 0;
+                    --en_subbytes <= '1';
+                    round_cnt_s <= round_cnt_r - 1;
+                    mm_word_cnt_s <= 0;
                     shift_in <= '1';
+                    n_state_reg <= PROCESS_CT;
+              elsif din_valid = '1' then
+                word_cnt_s <= word_cnt_r + 1;
+                if mm_word_cnt_r < BLOCK_WORDS_C -1 then
+                    mm_din_valid_s <= '1';
+                    mm_word_cnt_s <= mm_word_cnt_r + 1;
                 end if;
-            when PROCESS_MSG =>
-                if (round_cnt_r = NB_ROUNDS_KS_C and decrypt = '0') or (round_cnt_r = 0 and decrypt = '1' and word_cnt_r = BLOCK_WORDS_C)then
-                    n_state_reg <= OUTPUT_MSG;
-                    word_cnt_s <= 0;
-                elsif word_cnt_r = BLOCK_WORDS_C then
-                    if decrypt = '1' then
-                        round_cnt_s <= round_cnt_r - 1;
-                    else
-                        round_cnt_s <= round_cnt_r + 1;
-                    end if;
-                    word_cnt_s <= 0;
-                    en_subbytes <= '1';
-                elsif mm_done = '1' then
-                    if (round_cnt_r = NB_ROUNDS_KS_C - 1 and decrypt = '0') then
-                        sel_encout <= '1';
-                        en_dout <= '1';
-                    elsif round_cnt_r = 0 and decrypt = '1' then
-                        en_dout <= '1';
-                    else
+                if mm_dout_valid = '1' then
                         shift_in <= '1';
-                    end if;
-                    word_cnt_s <= word_cnt_r + 1;
-                else
-                    mm_start <= '1';
                 end if;
-            when OUTPUT_MSG =>
+              end if;
+            when PROCESS_CT =>
+              if (round_cnt_r = 0) then
                 dout_valid <= '1';
-                sel_encout <= not decrypt;
-                rot_dout <= '1';
-                if word_cnt_r = BLOCK_WORDS_C-1 then
+                sel_encout <= '0';
+                if word_cnt_r = BLOCK_WORDS_C - 1 then
+                  done_s <= '1';
+                  n_state_reg <= IDLE;
+                end if;
+              end if;
+              if word_cnt_r = 0 and mm_din_valid = '0' then
+                en_subbytes <= '1';
+                mm_din_valid_s <= '1';
+                --rnd_shift_rows <= '1';
+              elsif word_cnt_r = 0 then
+                word_cnt_s <= word_cnt_r + 1;
+                mm_word_cnt_s <= mm_word_cnt_r + 1;
+                mm_din_valid_s <= '1';
+                rnd_shift_rows <= '1';
+              elsif mm_word_cnt_r = BLOCK_WORDS_C then
+                round_cnt_s <= round_cnt_r - 1;
+                word_cnt_s <= 0;
+                mm_word_cnt_s <= 0;
+                shift_in <= '1';
+              else
+                if mm_word_cnt_r > 0 then
+                  shift_in <= '1';
+                end if;
+                mm_word_cnt_s <= mm_word_cnt_r + 1;
+                if word_cnt_r < BLOCK_WORDS_C then
+                  if word_cnt_r < BLOCK_WORDS_C - 1 then
+                    mm_din_valid_s <= '1';
+                  end if;
+                  rnd_shift_rows <= '1';
+                  word_cnt_s <= word_cnt_r + 1;
+                end if;
+              end if;
+            when PROCESS_PT =>
+                if mm_word_cnt_r < BLOCK_WORDS_C -1 then
+                  mm_din_valid_s <= '1';
+                end if;
+                rnd_shift_rows <= '1';
+                if (round_cnt_r = NB_ROUNDS_KS_C -1 and (mm_word_cnt_r > 0)) then
+                  dout_valid <= '1';
+                  sel_encout <= '1';--not decrypt;
+                  if word_cnt_r = BLOCK_WORDS_C - 1 then
                     done_s <= '1';
                     n_state_reg <= IDLE;
-                else
-                    word_cnt_s <= word_cnt_r + 1;
+                  end if;
                 end if;
+             --   if (round_cnt_r = NB_ROUNDS_KS_C) then
+             --       n_state_reg <= OUTPUT_MSG;
+            --        word_cnt_s <= 0;
+             --       mm_word_cnt_s <= 0;
+                if word_cnt_r = BLOCK_WORDS_C then
+                    --if decrypt = '1' then
+                  --      round_cnt_s <= round_cnt_r - 1;
+                 --   else
+                        round_cnt_s <= round_cnt_r + 1;
+                  --  end if;
+                    word_cnt_s <= 0;
+                    mm_word_cnt_s <= 0;
+                    en_subbytes <= '1';
+                    rnd_shift_rows <= '0';
+                    mm_din_valid_s <= '1';
+                elsif mm_dout_valid = '1' then
+                    shift_in <= '1';
+                    word_cnt_s <= word_cnt_r + 1;
+                    if mm_word_cnt_r < BLOCK_WORDS_C then
+                      mm_word_cnt_s <= mm_word_cnt_r + 1;
+                    end if;
+                elsif mm_word_cnt_r < BLOCK_WORDS_C then
+                    mm_word_cnt_s <= mm_word_cnt_r + 1;
+                end if;
+           -- when OUTPUT_MSG =>
+         --       dout_valid <= '1';
+         --       sel_encout <= not decrypt;
+         --       rot_dout <= '1';
+         --       if word_cnt_r = BLOCK_WORDS_C-1 then
+         --           done_s <= '1';
+         --           n_state_reg <= IDLE;
+         --       else
+           --         word_cnt_s <= word_cnt_r + 1;
+           --         rnd_shift_rows <= '1';
+           --     end if;
         end case;
 
     end process FSM_control_path;
@@ -309,6 +376,7 @@ begin
             end if;
             done_init_r <= done_init_s;
             done_r <= done_s;
+            mm_din_valid <= mm_din_valid_s;
             if en_decrypt = '1' then
                 decrypt_reg <= decrypt;
             end if;
@@ -353,9 +421,9 @@ begin
     i_round : entity work.Round
         port map(
             clk => clk,
-            mi => decin_mux,
+            mi => din_mux,
             co => round_out,
-            sel_row => word_s,
+            shift_rows => rnd_shift_rows,
             sel_inv => decrypt_reg,
             shift_in => shift_in,
             en_subbytes => en_subbytes,
@@ -364,26 +432,26 @@ begin
         i_matrix_multiply : entity work.MatrixMultiply
             generic map(
                 DataWidth => CCW,
-                Depth => 16
+                PipelineDepth => 2
             )
             port map(
                 clk => clk,
                -- rst => rst,
                 --data signals
                 din => mm_in_mux,
+                din_valid => mm_din_valid,
                 matrix => key_matrix_mux,
                 dout => mm_dout,
-                start => mm_start,
-                done => mm_done
+                dout_valid => mm_dout_valid
             );
 
-    with word_s select matrix_mux <=
+    with mm_word_s select matrix_mux <=
         COL_M0 when "00",
         COL_M1 when "01",
         COL_M2 when "10",
         COL_M3 when others;
 
-    with word_s select inv_matrix_mux <=
+    with mm_word_s select inv_matrix_mux <=
         COL_INV_M0 when "00",
         COL_INV_M1 when "01",
         COL_INV_M2 when "10",
@@ -395,22 +463,21 @@ begin
     with sel_mm_in select mm_in_mux <=
         round_out when "00",
         col_diff_out_s when "01",
-        decin_mux when "10",
+        din xor kr_out when "10",
         (others => '-') when others;
 
     din_mux <= din when sel_in = '1' else encout_mux;
-    decin_mux <= din_mux xor kr_out when sel_decin = '1' else din_mux;
     encout_mux <= mm_dout xor kr_out when sel_encout = '1' else mm_dout;
     dout_mux <= round_out when decrypt = '1' else encout_mux;
-    dout <= dout_r(0 to CCW - 1);
+    dout <= dout_mux; --dout_r(0 to CCW - 1);
 
     round_s <= std_logic_vector(to_unsigned(round_cnt_r, log2_ceil(NB_ROUNDS_KS_C)));
     ku_round_s <= (others => '0') when (round_cnt_r <= 1) else
                   std_logic_vector(to_unsigned(round_cnt_r - 1, log2_ceil(NB_ROUNDS_KS_C)));
     word_s <= std_logic_vector(to_unsigned(word_cnt_r, log2_ceil(BLOCK_WORDS_C)));
+    mm_word_s <= std_logic_vector(to_unsigned(mm_word_cnt_r, log2_ceil(BLOCK_WORDS_C)));
     ki <= key when sel_key = '1' else ko;
     kr_addr <= round_s & word_s;
     kr_din <= key when sel_krdin = '1' else ko;
 
-    done_mm <= mm_done;
 end architecture behavioral;
